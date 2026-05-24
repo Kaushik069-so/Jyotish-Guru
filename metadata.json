@@ -1,0 +1,6 @@
+{
+  "name": "JyotishGuru",
+  "description": "Vedic astrology, customized pooja guides, festival calendar, hast-rekha palmistry, and traditional prasad cooking powered by AI.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
