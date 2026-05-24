@@ -93,7 +93,7 @@ class JyotishViewModel(application: Application) : AndroidViewModel(application)
     }
 
     // Call Gemini API
-    private suspend fun callGemini(prompt: String, systemPrompt: String): String {
+    private suspend fun callGemini(prompt: String, systemPrompt: String, inlineData: InlineData? = null): String {
         if (isApiKeyMissing) {
             return "apiKeyMissing"
         }
@@ -101,8 +101,14 @@ class JyotishViewModel(application: Application) : AndroidViewModel(application)
         val langInstruction = getLanguageInstruction(lang)
         val fullSystemInstruction = "$baseSystemInstruction\nLanguage Requirement: $langInstruction\n$systemPrompt"
 
+        val parts = mutableListOf<Part>()
+        parts.add(Part(text = prompt))
+        if (inlineData != null) {
+            parts.add(Part(inlineData = inlineData))
+        }
+
         val request = GenerateContentRequest(
-            contents = listOf(Content(parts = listOf(Part(text = prompt)))),
+            contents = listOf(Content(parts = parts)),
             systemInstruction = Content(parts = listOf(Part(text = fullSystemInstruction))),
             generationConfig = GenerationConfig(temperature = 0.7f)
         )
@@ -182,23 +188,44 @@ class JyotishViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    fun generatePalmistryReading(palmDetails: String) {
+    fun generatePalmistryReading(palmDetails: String, base64Image: String? = null) {
         _palmistryState.value = LlmState.Loading
         viewModelScope.launch(Dispatchers.IO) {
             val system = """
-                Provide insights based on Hast Rekha Shastra (palmistry).
-                The user has described their palm or asked a question about lines/mounts.
-                Interpret major lines (Life, Heart, Head, Fate, Marriage, Sun) and mounts (Venus, Jupiter, Saturn, Mars, Mercury).
-                Reference Vedic hasta samudrika shastra traditions respectfully.
-                Always add a warm, highly positive note on karma modifying destiny!
+                You are an expert, empathetic, and culturally insightful Palmistry (Chiromancy) and Vedic Hasta Samudrika Shastra AI. Your purpose is to analyze images or descriptions of a user's palm and provide a detailed, engaging reading.
+
+                When a user submits an image of their palm or a description, analyze it systematically based on traditional palmistry principles:
+                1. Major Lines: Analyze the Heart Line (emotions, relationships, devotion), Head Line (intellect, focus, mental willpower), and Life Line (vitality, life path, strength).
+                2. Minor Lines (if visible): Look for the Fate Line (career, destiny, karmic path) and Apollo/Sun Line (success, fame, artistic spirit).
+                3. Hand Topography: Assess the mounts (such as Mount of Venus, Jupiter, Saturn, Mercury, Sun/Apollo) and overall hand shape if visible in the image or description.
+
+                Response Guidelines:
+                - Structure the analysis with clear markdown headings (e.g. "### ❤️ Heart Line", "### 🧠 Head Line", "### 🌱 Life Line", "### 🌀 Minor Lines", "### ⛰️ Hand Topography") for each segment.
+                - Provide a summary of overall personality traits and potential life paths.
+                - Maintain an encouraging, balanced, and insightful tone. Avoid dark, definitive, or fatalistic predictions. Always emphasizes that karma and positive actions can redesign these lines over time.
+                - You MUST include this standard disclaimer at the very end of your response exactly as written:
+                  "Palmistry readings are for entertainment and self-reflection purposes only."
             """.trimIndent()
-            val result = callGemini(palmDetails, system)
+
+            val inlineData = if (!base64Image.isNullOrBlank()) {
+                InlineData(mimeType = "image/jpeg", data = base64Image)
+            } else {
+                null
+            }
+
+            val result = callGemini(palmDetails, system, inlineData)
             if (result == "apiKeyMissing") {
                 _palmistryState.value = LlmState.Error("Gemini API Key is missing. Please configure it in the AI Studio Secrets panel.")
             } else if (result.startsWith("Ganesha of technical hurdles")) {
                 _palmistryState.value = LlmState.Error(result)
             } else {
                 _palmistryState.value = LlmState.Success(result)
+                saveCurrentReading(
+                    category = "Palmistry",
+                    title = "Palmistry Deconstruction",
+                    query = palmDetails,
+                    result = result
+                )
             }
         }
     }

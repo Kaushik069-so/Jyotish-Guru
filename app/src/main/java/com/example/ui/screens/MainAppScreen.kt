@@ -39,6 +39,20 @@ import com.example.data.database.SavedRecipe
 import com.example.ui.theme.*
 import com.example.ui.viewmodel.JyotishViewModel
 import com.example.ui.viewmodel.LlmState
+import androidx.compose.foundation.Image
+import android.net.Uri
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.util.Base64
+import java.io.ByteArrayOutputStream
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.Path
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 data class FestivalItem(
     val name: String,
@@ -106,6 +120,15 @@ fun tr(key: String, lang: String): String {
         "settings_timezone" -> "• Timezone: UTC (+05:30 Equivalent)"
         "settings_btn_save" -> "Save Divine Profile"
         "settings_btn_cancel" -> "Cancel"
+        "palm_overlay_title" -> "Sacred Alignment Scan"
+        "palm_overlay_guide" -> "Align your palm center with the sacred guidelines below and capture/upload."
+        "palm_overlay_btn_upload" -> "Pick Palm Image to Align"
+        "palm_overlay_btn_change" -> "Select Different Palm"
+        "palm_overlay_btn_analyze" -> "Deconstruct My Palm Lines & Mounts"
+        "palm_overlay_step1" -> "Step 1: Choose Active Hand"
+        "palm_overlay_step2" -> "Step 2: Choose Focus Domain"
+        "palm_overlay_step3" -> "Step 3: Align & Submit Palm Image"
+        "palm_overlay_step4" -> "Step 4: Additional Details (Optional)"
         else -> key
     }
 
@@ -2902,9 +2925,17 @@ fun PalmistryReadView(
     palmState: LlmState,
     isDarkTheme: Boolean
 ) {
+    val currentLang by viewModel.appLanguage.collectAsState()
+    val context = LocalContext.current
+
     var handSide by remember { mutableStateOf("Right") } // "Left" | "Right"
     var focusArea by remember { mutableStateOf("General Destiny") } // "General Destiny"
     var queryDescription by remember { mutableStateOf("") }
+    
+    // Image selection state
+    var imageUri by remember { mutableStateOf<Uri?>(null) }
+    var imageBitmap by remember { mutableStateOf<ImageBitmap?>(null) }
+    var base64Image by remember { mutableStateOf<String?>(null) }
 
     val questionSuggestions = listOf(
         "Deep headline fork with ascending fate line.",
@@ -2912,6 +2943,68 @@ fun PalmistryReadView(
         "Mount of Venus is highly elevated with stars.",
         "Heartline reaches between Index and Middle finger."
     )
+
+    val coroutineScope = rememberCoroutineScope()
+
+    // Image Picker Launcher
+    val imagePickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            imageUri = uri
+            coroutineScope.launch(Dispatchers.IO) {
+                try {
+                    // Pre-calculate image scales properly
+                    val stream1 = context.contentResolver.openInputStream(uri)
+                    val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                    BitmapFactory.decodeStream(stream1, null, opts)
+                    stream1?.close()
+
+                    val maxDim = 800
+                    var scale = 1
+                    while (opts.outWidth / scale > maxDim || opts.outHeight / scale > maxDim) {
+                        scale *= 2
+                    }
+
+                    val decodeOpts = BitmapFactory.Options().apply { inSampleSize = scale }
+                    val stream2 = context.contentResolver.openInputStream(uri)
+                    val rawBitmap = BitmapFactory.decodeStream(stream2, null, decodeOpts)
+                    stream2?.close()
+                    
+                    if (rawBitmap != null) {
+                        // Further scaling if exact dimensions matter, but inSampleSize is usually close enough
+                        val scaledBitmap = if (rawBitmap.width > maxDim || rawBitmap.height > maxDim) {
+                            val aspectRatio = rawBitmap.width.toFloat() / rawBitmap.height.toFloat()
+                            val width: Int
+                            val height: Int
+                            if (aspectRatio > 1) {
+                                width = maxDim
+                                height = (maxDim / aspectRatio).toInt()
+                            } else {
+                                width = (maxDim * aspectRatio).toInt()
+                                height = maxDim
+                            }
+                            Bitmap.createScaledBitmap(rawBitmap, width, height, true)
+                        } else {
+                            rawBitmap
+                        }
+                        
+                        val outputStream = ByteArrayOutputStream()
+                        scaledBitmap.compress(Bitmap.CompressFormat.JPEG, 80, outputStream)
+                        val bytes = outputStream.toByteArray()
+                        val b64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
+                        
+                        withContext(Dispatchers.Main) {
+                            imageBitmap = scaledBitmap.asImageBitmap()
+                            base64Image = b64
+                        }
+                    }
+                } catch (e: Exception) {
+                    // Handle image decoding error gracefully
+                }
+            }
+        }
+    }
 
     Column(
         verticalArrangement = Arrangement.spacedBy(10.dp),
@@ -2925,9 +3018,9 @@ fun PalmistryReadView(
             shape = RoundedCornerShape(12.dp),
             modifier = Modifier.fillMaxWidth()
         ) {
-            Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text(
-                    text = "Request Personalized Samudrika Reading",
+                    text = tr("palm_overlay_title", currentLang),
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold,
                     color = DeepMaroon,
@@ -2935,7 +3028,7 @@ fun PalmistryReadView(
                 )
 
                 // Hand choice
-                Text("Step 1: Choose Active Hand", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = SecondaryText)
+                Text(tr("palm_overlay_step1", currentLang), fontSize = 11.sp, fontWeight = FontWeight.Bold, color = SecondaryText)
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
                     modifier = Modifier.fillMaxWidth()
@@ -2945,19 +3038,19 @@ fun PalmistryReadView(
                         colors = ButtonDefaults.buttonColors(containerColor = if (handSide == "Left") RoyalSaffron else ChandanBeige.copy(alpha = 0.3f)),
                         modifier = Modifier.weight(1f)
                     ) {
-                        Text("Left (Potential)", color = if (handSide == "Left") CreamWhite else PrimaryText, fontSize = 11.sp)
+                        Text(if (currentLang == "hi") "बायां हाथ (क्षमता)" else "Left (Potential)", color = if (handSide == "Left") CreamWhite else PrimaryText, fontSize = 11.sp)
                     }
                     Button(
                         onClick = { handSide = "Right" },
                         colors = ButtonDefaults.buttonColors(containerColor = if (handSide == "Right") RoyalSaffron else ChandanBeige.copy(alpha = 0.3f)),
                         modifier = Modifier.weight(1f)
                     ) {
-                        Text("Right (Actual)", color = if (handSide == "Right") CreamWhite else PrimaryText, fontSize = 11.sp)
+                        Text(if (currentLang == "hi") "दायां हाथ (वास्तविक)" else "Right (Actual)", color = if (handSide == "Right") CreamWhite else PrimaryText, fontSize = 11.sp)
                     }
                 }
 
                 // Focus area
-                Text("Step 2: Choose Focus Domain", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = SecondaryText)
+                Text(tr("palm_overlay_step2", currentLang), fontSize = 11.sp, fontWeight = FontWeight.Bold, color = SecondaryText)
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
@@ -2975,12 +3068,204 @@ fun PalmistryReadView(
                     }
                 }
 
-                // Description
-                Text("Step 3: Describe your lines or mounts", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = SecondaryText)
+                // NEW Step 3: Sacred Palm Scanner with alignment overlay
+                Text(tr("palm_overlay_step3", currentLang), fontSize = 11.sp, fontWeight = FontWeight.Bold, color = SecondaryText)
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(320.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(if (isDarkTheme) Color(0xFF1A1A2E) else LotusCream.copy(alpha = 0.5f))
+                        .border(
+                            border = BorderStroke(1.5.dp, if (imageBitmap != null) AntiqueGold else Color.Gray.copy(alpha = 0.5f)),
+                            shape = RoundedCornerShape(12.dp)
+                        )
+                ) {
+                    if (imageBitmap != null) {
+                        // User's uploaded palm
+                        Image(
+                            bitmap = imageBitmap!!,
+                            contentDescription = "User Palm Image",
+                            modifier = Modifier.fillMaxSize(),
+                            contentScale = androidx.compose.ui.layout.ContentScale.Crop
+                        )
+                    } else {
+                        // Background placeholder visual
+                        Column(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .clickable { imagePickerLauncher.launch("image/*") }
+                                .padding(16.dp),
+                            verticalArrangement = Arrangement.Center,
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.CameraAlt,
+                                contentDescription = "Camera Icon",
+                                tint = RoyalSaffron,
+                                modifier = Modifier.size(40.dp)
+                            )
+                            Spacer(modifier = Modifier.height(10.dp))
+                            Text(
+                                text = tr("palm_overlay_guide", currentLang),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = SecondaryText,
+                                textAlign = TextAlign.Center,
+                                modifier = Modifier.padding(horizontal = 16.dp)
+                            )
+                            Spacer(modifier = Modifier.height(12.dp))
+                            Button(
+                                onClick = { imagePickerLauncher.launch("image/*") },
+                                colors = ButtonDefaults.buttonColors(containerColor = RoyalSaffron)
+                            ) {
+                                Text(tr("palm_overlay_btn_upload", currentLang), fontSize = 11.sp)
+                            }
+                        }
+                    }
+
+                    // Vector Alignment Overlay drawn on top of the container
+                    Canvas(modifier = Modifier.fillMaxSize()) {
+                        val w = size.width
+                        val h = size.height
+                        val strokeWidth = 2.dp.toPx()
+                        
+                        // Golden palm outline path
+                        val handPath = Path().apply {
+                            moveTo(w * 0.35f, h * 0.95f)
+                            lineTo(w * 0.65f, h * 0.95f)
+                            quadraticTo(w * 0.78f, h * 0.82f, w * 0.8f, h * 0.67f)
+                            quadraticTo(w * 0.85f, h * 0.50f, w * 0.8f, h * 0.44f)
+                            lineTo(w * 0.77f, h * 0.25f)
+                            quadraticTo(w * 0.73f, h * 0.20f, w * 0.69f, h * 0.26f)
+                            lineTo(w * 0.68f, h * 0.42f)
+                            lineTo(w * 0.64f, h * 0.16f)
+                            quadraticTo(w * 0.60f, h * 0.12f, w * 0.56f, h * 0.18f)
+                            lineTo(w * 0.56f, h * 0.40f)
+                            lineTo(w * 0.52f, h * 0.10f)
+                            quadraticTo(w * 0.48f, h * 0.07f, w * 0.44f, h * 0.12f)
+                            lineTo(w * 0.44f, h * 0.40f)
+                            lineTo(w * 0.40f, h * 0.18f)
+                            quadraticTo(w * 0.36f, h * 0.14f, w * 0.32f, h * 0.20f)
+                            lineTo(w * 0.32f, h * 0.48f)
+                            quadraticTo(w * 0.22f, h * 0.56f, w * 0.14f, h * 0.64f)
+                            quadraticTo(w * 0.12f, h * 0.70f, w * 0.18f, h * 0.74f)
+                            quadraticTo(w * 0.24f, h * 0.76f, w * 0.30f, h * 0.68f)
+                            quadraticTo(w * 0.32f, h * 0.82f, w * 0.35f, h * 0.95f)
+                        }
+
+                        // Drawing translucent guides
+                        drawPath(
+                            path = handPath,
+                            color = Color(0x4DFFB300), // Soft warm gold template
+                            style = Stroke(width = strokeWidth)
+                        )
+
+                        // 1. HEART LINE Guide (High pink rose line sweeping high)
+                        val heartPath = Path().apply {
+                            moveTo(w * 0.78f, h * 0.46f)
+                            quadraticTo(w * 0.58f, h * 0.42f, w * 0.44f, h * 0.36f)
+                            quadraticTo(w * 0.38f, h * 0.33f, w * 0.36f, h * 0.26f)
+                        }
+                        drawPath(
+                            path = heartPath,
+                            color = Color(0xAAFF1744), // Vibrant crimson heart energy
+                            style = Stroke(width = strokeWidth + 2f)
+                        )
+
+                        // 2. HEAD LINE Guide (Intellect blue line crossing center)
+                        val headPath = Path().apply {
+                            moveTo(w * 0.34f, h * 0.48f)
+                            quadraticTo(w * 0.55f, h * 0.50f, w * 0.76f, h * 0.60f)
+                        }
+                        drawPath(
+                            path = headPath,
+                            color = Color(0xAA00E5FF), // Intellectual bright cyan
+                            style = Stroke(width = strokeWidth + 2f)
+                        )
+
+                        // 3. LIFE LINE Guide (Protective amber line curving Venus)
+                        val lifePath = Path().apply {
+                            moveTo(w * 0.34f, h * 0.48f)
+                            quadraticTo(w * 0.46f, h * 0.60f, w * 0.48f, h * 0.74f)
+                            quadraticTo(w * 0.50f, h * 0.88f, w * 0.40f, h * 0.93f)
+                        }
+                        drawPath(
+                            path = lifePath,
+                            color = Color(0xAAFF9100), // Warm sunset security orange
+                            style = Stroke(width = strokeWidth + 2f)
+                        )
+
+                        // 4. FATE LINE Guide (Celestial gold line vertically upwards)
+                        val fatePath = Path().apply {
+                            moveTo(w * 0.51f, h * 0.90f)
+                            lineTo(w * 0.49f, h * 0.38f)
+                        }
+                        drawPath(
+                            path = fatePath,
+                            color = Color(0xAAFFEA00), // Bright yellow path
+                            style = Stroke(width = strokeWidth)
+                        )
+                    }
+
+                    // Floating help label
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(8.dp)
+                            .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(12.dp))
+                            .padding(horizontal = 8.dp, vertical = 4.dp)
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Box(modifier = Modifier.size(6.dp).background(Color.Green, CircleShape))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = if (imageBitmap != null) "PASSPORT DETECTED" else "GUIDE SCANNERS",
+                                fontSize = 9.sp,
+                                color = CreamWhite,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+                }
+
+                // If image selected, show small action bin to replace/remove
+                if (imageBitmap != null) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        OutlinedButton(
+                            onClick = { imagePickerLauncher.launch("image/*") },
+                            modifier = Modifier.weight(1.5f),
+                            border = BorderStroke(1.dp, RoyalSaffron)
+                        ) {
+                            Icon(Icons.Default.Refresh, contentDescription = "Replace Image", modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(tr("palm_overlay_btn_change", currentLang), fontSize = 11.sp, color = RoyalSaffron)
+                        }
+                        OutlinedButton(
+                            onClick = {
+                                imageUri = null
+                                imageBitmap = null
+                                base64Image = null
+                            },
+                            modifier = Modifier.weight(1f),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.Red),
+                            border = BorderStroke(1.dp, Color.Red.copy(alpha = 0.5f))
+                        ) {
+                            Icon(Icons.Default.Delete, contentDescription = "Clear Image", modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Clear", fontSize = 11.sp, color = Color.Red)
+                        }
+                    }
+                }
+
+                // Step 4: Additional Details Description
+                Text(tr("palm_overlay_step4", currentLang), fontSize = 11.sp, fontWeight = FontWeight.Bold, color = SecondaryText)
                 OutlinedTextField(
                     value = queryDescription,
                     onValueChange = { queryDescription = it },
-                    placeholder = { Text("Write about your mount puffiness, line forks, stars, lengths, or breaks...") },
+                    placeholder = { Text(tr("placeholder_palmistry_desc", currentLang)) },
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(100.dp),
@@ -3002,8 +3287,12 @@ fun PalmistryReadView(
 
                 Button(
                     onClick = {
-                        val finalPrompt = "Palmistry Consultation: Side=$handSide. Area=$focusArea. Details=$queryDescription"
-                        viewModel.generatePalmistryReading(finalPrompt)
+                        val finalPrompt = "Vedic Palmistry Alignment Scan:\n" +
+                            "- Active Hand: $handSide\n" +
+                            "- Focus Domain: $focusArea\n" +
+                            "- Manual User Details: ${queryDescription.ifBlank { "Based completely on the submitted palm scan." }}"
+                        
+                        viewModel.generatePalmistryReading(finalPrompt, base64Image)
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = RoyalSaffron),
                     modifier = Modifier
@@ -3011,18 +3300,18 @@ fun PalmistryReadView(
                         .border(1.dp, AntiqueGold, RoundedCornerShape(8.dp)),
                     shape = RoundedCornerShape(8.dp)
                 ) {
-                    Icon(imageVector = Icons.Default.Recommend, contentDescription = "Query")
+                    Icon(imageVector = Icons.Default.Recommend, contentDescription = "Deconstruct Query")
                     Spacer(modifier = Modifier.width(6.dp))
-                    Text("Deconstruct My Palm Lines", fontWeight = FontWeight.Bold)
+                    Text(tr("palm_overlay_btn_analyze", currentLang), fontFamily = FontFamily.Serif, fontWeight = FontWeight.Bold)
                 }
             }
         }
 
-        // Result Card
+        // Result Card displaying generated scroll
         Card(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(400.dp)
+                .height(420.dp)
                 .border(2.dp, AntiqueGold, RoundedCornerShape(12.dp)),
             colors = CardDefaults.cardColors(containerColor = LotusCream)
         ) {
@@ -3044,14 +3333,18 @@ fun PalmistryReadView(
                                 text = "Sacred Reading Chamber",
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.Bold,
-                                color = DeepMaroon
+                                color = DeepMaroon,
+                                fontFamily = FontFamily.Serif
                             )
+                            Spacer(modifier = Modifier.height(6.dp))
                             Text(
-                                "Describe your lines with the chips above. Our AI JyotishGuru translates Sanskrit Samudrika texts to output elegant personal feedback scroll.",
+                                text = if (currentLang == "hi") 
+                                    "अपने हाथ की फोटो अपलोड करें या लकीरों का वर्णन करें। हमारे विशेषज्ञ ज्योतिष गुरु वैदिक समुद्रिक शास्त्र ग्रंथों के अनुसार एक व्यक्तिगत मार्गदर्शन स्क्रॉल प्रस्तुत करेंगे।" 
+                                    else "Align your palm with the scanner guidelines or type detail questions. Our AI JyotishGuru deciphers cosmic lines using Sanskrit Hast Samudrika texts to release your sacred personal scroll.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = SecondaryText,
                                 textAlign = TextAlign.Center,
-                                modifier = Modifier.padding(horizontal = 24.dp)
+                                modifier = Modifier.padding(horizontal = 16.dp)
                             )
                         }
                     }
@@ -3079,7 +3372,7 @@ fun PalmistryReadView(
                                     viewModel.saveCurrentReading(
                                         category = "Palmistry",
                                         title = "$focusArea Reading ($handSide Hand)",
-                                        query = queryDescription,
+                                        query = if (queryDescription.isNotBlank()) queryDescription else "Scanner alignment reading",
                                         result = successText
                                     )
                                 },
